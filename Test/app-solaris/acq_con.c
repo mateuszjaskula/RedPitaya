@@ -3,6 +3,7 @@
 #include <signal.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 #define __STDC_FORMAT_MACROS
 #include <inttypes.h>
 #include "redpitaya/rp.h"
@@ -48,7 +49,6 @@ int main(int argc, char **argv)
 	openBuffFile();
 	initRedPitaya();
 
-	printf("%llu\n", nsec_in_sec);
   /* mount sd-card in rw mode */
   system("rw");
   /* allocate memory buffer */
@@ -63,8 +63,11 @@ int main(int argc, char **argv)
 	    /* Get the whole buffer into buf */
 			raise(SIGUSR1);
 			clock_gettime(CLOCK_REALTIME, &start_acq);
+			raise(SIGUSR1);
     	rp_AcqGetOldestDataRaw(channel, &array_size, buff);
+			raise(SIGUSR1);
 	    saveBuffToFile(buff, array_size);
+			raise(SIGUSR1);
 			clock_gettime(CLOCK_REALTIME, &stop_acq);
 			//rem.tv_sec = stop_acq.tv_sec - start_acq.tv_sec;
 			//rem.tv_nsec = stop_acq.tv_nsec - start_acq.tv_nsec;
@@ -73,18 +76,13 @@ int main(int argc, char **argv)
 			uint32_t acq_time = (nsec_in_sec * rem.tv_sec + rem.tv_nsec);
 			if( acq_time > buffer_fill_time )
 			{
-				printf("Acquisition took longer then buffer fills,"
-				 "exiting to prevent data corruption!\n");
-				printf("%lf buffer: %"PRIu64"\n", (10e9 * rem.tv_sec + rem.tv_nsec),
-				 buffer_fill_time);
-				raise(SIGINT);
+				printf("Warning Acquisition took longer then buffer fills \n");
+				printf("%"PRIu32" buffer: %"PRIu64"\n", acq_time, buffer_fill_time);
 			}
-			else
-			{
+
 			/* sleep to let buffer fill with new data */
-				rem.tv_nsec = buffer_fill_time - rem.tv_nsec;
-				nanosleep(&rem, &req);
-			}
+			rem.tv_nsec = buffer_fill_time - rem.tv_nsec;
+			nanosleep(&rem, &req);
   }
 
 	printf("Stopping");
@@ -156,6 +154,7 @@ void saveTimeStamp(int sig)
 	static long long time_stamp;
 	static struct timespec curr_time;
 	clock_gettime(CLOCK_REALTIME, &curr_time);
+
 	/* check if this is first timestamp in runtime, if so only save timestamp */
 	if( last_time.tv_nsec != 0 || last_time.tv_sec !=0 )
 	{
@@ -164,6 +163,7 @@ void saveTimeStamp(int sig)
 		fprintf(time_stamps_file, "%lld, \n", time_stamp);
 	}
 
+	fsync(fileno(time_stamps_file));
 	last_time = curr_time;
 }
 
@@ -183,6 +183,8 @@ void saveBuffToFile(int16_t *buffer, uint32_t size)
 
 	for(int i = 0; i < size; i++)
 			fprintf(data_file, "%d\n", buffer[i]);
+
+	fsync(fileno(data_file));
 }
 
 void openBuffFile()
@@ -271,5 +273,4 @@ int parseArgs(int argc, char **argv)
 	}
 
 	return 0;
-
 }
