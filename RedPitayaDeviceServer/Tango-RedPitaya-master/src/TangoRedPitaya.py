@@ -1,4 +1,3 @@
-#!/usr/bin/python
 # -*- coding: utf-8 -*-
 
 ## Tango-RedPitaya -- Tango device server for RedPitaya multi-istrument board
@@ -17,8 +16,6 @@ from rpyc import connect
 from urllib2 import urlopen
 import json
 import re
-import paramiko
-from subprocess import call
 
 
 class RedPitayaBoard(Device):
@@ -29,6 +26,7 @@ class RedPitayaBoard(Device):
 	### RPyC connection details -----------------------------------------------
 
 	host = device_property(dtype=str)							# board hostname
+	port = device_property(dtype=int, default_value=18861)		# board port
 	reconnect = device_property(dtype=int, default_value=10)	# max reconnect attepts
 
 
@@ -57,9 +55,8 @@ class RedPitayaBoard(Device):
 	def board_connect(self):
 		""" Connect to the board """
 		try:
-			self.client = paramiko.SSHClient()
-			self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-			self.client.connect(self.host, username='root', password='root')
+			self.conn = connect(self.host, self.port)
+			self.RP = RedPitaya(self.conn)
 		except Exception as e:
 			self.connection_error(e)
 		else:
@@ -109,16 +106,9 @@ class RedPitayaBoard(Device):
 			self.status_message = "Error: Type must be either sine, sqr or tri"
 			return False
 		else:
-			try:
-				command = "/opt/redpitaya/bin/generate %d %s" % (channel, opts)
-				stdin, stdout, stderr = self.client.exec_command(command)
-				return True
-			except Exception as e:
-				self.app_error(e)
-				for line in stderr:
-    				print "Error: " + line.strip('\n')
-    				
-    			return False
+			command = "/opt/bin/generate %d %s" % (channel, opts)
+			self.conn.root.run_command(command)
+			return True
 
 	def scope_active_func(self):
 		""" Get scope status. It's here, because there is no way of reading the attribute inside the server.
@@ -134,6 +124,13 @@ class RedPitayaBoard(Device):
 				return True
 			else:
 				return False
+
+	def generator_active(self, ch):
+		""" Get generator channel status. The reason of this function existece is the same as scope_active_func """
+		if ch == 1:
+			return not self.RP.asga.output_zero
+		elif ch == 2:
+			return not self.RP.asgb.output_zero
 
 
 	### Interface methods -----------------------------------------------------
@@ -158,8 +155,10 @@ class RedPitayaBoard(Device):
 	def dev_state(self):
 		""" Appropiate state handling """
 		if self._state != DevState.FAULT:	# if state is FAULT set it immediately, to prevent timeouts
-			
-			
+			# if generator or scope is active, state must be RUNNING no matter what
+			if self.generator_active(1) or self.generator_active(2) or self.scope_active_func():
+				self.set_state(DevState.RUNNING)
+				return DevState.RUNNING
 		self.set_state(self._state)
 		return self._state
 
@@ -188,7 +187,7 @@ class RedPitayaBoard(Device):
 			   doc="Connection ping check")
 	def ping(self):
 		try:
-			call(['"ping" "-c 1 %s"']), self.host
+			self.conn.ping()
 		except Exception as e:	# should be PingError, but it's not working
 			self.connection_error(e)
 			if(self.reconnect_tries < self.reconnect):
