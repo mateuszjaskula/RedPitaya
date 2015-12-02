@@ -23,7 +23,7 @@ ACQ_CON_C = acq_con.c
 ACQ_CON=acquireContinousApp
 
 # GCC compiling & linking flags
-CFLAGS  =-g -std=gnu99 -Wall -Werror -I../../api/include
+CFLAGS  =-g -std=gnu99 -Wall -Werror -O3 -I../../api/include
 CFLAGS += -DVERSION=$(VERSION) -DREVISION=$(REVISION)
 
 # Red Pitaya common SW directory
