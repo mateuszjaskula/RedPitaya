@@ -10,8 +10,10 @@
 
 #define nsec_in_sec 1000000000ULL
 #define million 1000000UL
+
 bool stop;
 bool enabled_timestamps;
+bool enabled_fsync;
 FILE* time_stamps_file;
 FILE* data_file;
 int rp_decimation = RP_DEC_1024;
@@ -39,7 +41,7 @@ void timespec_diff(struct timespec *start, struct timespec *stop,
 int main(int argc, char **argv)
 {
   static uint32_t array_size = 16 * 1024; //Current buffer size.
-	static uint64_t buffer_fill_time;
+	static uint64_t buffer_fill_time_ns;
 	static struct timespec start_acq, stop_acq, rem, req;
 
 	defineSignals();
@@ -49,12 +51,18 @@ int main(int argc, char **argv)
 	openBuffFile();
 	initRedPitaya();
 
-  /* mount sd-card in rw mode */
+  /*
+		mount sd-card in rw mode,
+	  kill webserver to prevent data corruption,
+		synchronize I/O buffer_fill_time_ns
+	*/
   system("rw");
+	system("killall nginx");
+	system("sync");
   /* allocate memory buffer */
   int16_t *buff = (int16_t *)malloc(array_size * sizeof(int16_t));
 	/*  */
-	buffer_fill_time = array_size * nsec_in_sec * decimation / (125 * million);
+	buffer_fill_time_ns = array_size * nsec_in_sec * decimation / (125 * million);
 
 	printf("Starting!\n");
 	/* acquire till stop */
@@ -73,19 +81,24 @@ int main(int argc, char **argv)
 			/* If saving buffer took too long time, then exit too avoid losing data */
 			uint32_t acq_time_ns = (nsec_in_sec * rem.tv_sec + rem.tv_nsec);
 			/* sleep to let buffer fill with new data */
-			rem.tv_sec = (buffer_fill_time - acq_time) / nsec_in_sec;
-			rem.tv_nsec = buffer_fill_time - acq_time;
-			if( acq_time > buffer_fill_time )
+			rem.tv_sec = (buffer_fill_time_ns - acq_time_ns) / nsec_in_sec;
+			rem.tv_nsec = buffer_fill_time_ns - acq_time_ns;
+			if( acq_time_ns > buffer_fill_time_ns )
 			{
 				printf("Warning Acquisition took longer then buffer fills \n");
-				printf("%"PRIu32" buffer: %"PRIu64"\n", acq_time, buffer_fill_time);
+				printf("%"PRIu32" buffer: %"PRIu64"\n", acq_time_ns, buffer_fill_time_ns);
+				/* Don't sleep if we are already losing any samples */
+				rem.tv_sec = 0;
+				rem.tv_nsec = 0;
 			}
 
 
 			nanosleep(&rem, &req);
   }
 
-	printf("Stopping");
+	printf("Stopping!\n");
+	system("sync");
+	system("nginx");
 	cleanUpResources(buff);
   return 0;
 }
@@ -163,7 +176,6 @@ void saveTimeStamp(int sig)
 		fprintf(time_stamps_file, "%lld, \n", time_stamp);
 	}
 
-	//fsync(fileno(time_stamps_file));
 	last_time = curr_time;
 }
 
@@ -180,14 +192,18 @@ void saveBuffToFile(int16_t *buffer, uint32_t size)
 		for(int i = 0; i < size; i++)
 			fprintf(data_file, "%llu, %d\n", (timestamp + i*offset), buffer[i]);
 
-		fsync(fileno(data_file));
+		if (enabled_fsync)
+			fsync(fileno(data_file));
+
 		return;
 	}
 
 	for(int i = 0; i < size; i++)
 			fprintf(data_file, "%d\n", buffer[i]);
 
-	//fsync(fileno(data_file));
+	if (enabled_fsync)
+		fsync(fileno(data_file));
+
 	return;
 }
 
@@ -204,13 +220,14 @@ void closeBuffFile()
 
 int parseArgs(int argc, char **argv)
 {
+	printf("Usage: ./acquireContinous CH Decimation AbsolutePathToDataFile \n"
+	" [Optional: -t enables timestamps -s enables fsync on data file]\n");
 	if( argc < 4 )
 	{
-		printf("Usage: ./acquireContinous CH Decimation AbsolutePathToDataFile [Optional: -t enables timestamps]\n");
 		return 1;
 	}
 
-	if ( argv[1] == 0)
+	if ( atoi(argv[1]) == 0)
 	{
 		channel = RP_CH_1;
 		printf("Setting channel to %d\n", RP_CH_1);
@@ -267,12 +284,31 @@ int parseArgs(int argc, char **argv)
 		printf("Warning: filePath is probably not absolute!\n"
 		"This may lead to errors!\n");
 
-	if ( argc == 5 )
+	if ( argc >= 5 )
 	{
 		if ( strcmp(argv[4],"-t") == 0 )
 		{
 			enabled_timestamps=1;
 			printf("Enabled timestamps\n");
+		}
+		else if ( strcmp(argv[4],"-s") == 0 )
+		{
+			enabled_fsync=1;
+			printf("Enabled fsync\n");
+		}
+	}
+	
+	if ( argc == 6 )
+	{
+		if ( strcmp(argv[5],"-t") == 0 )
+		{
+			enabled_timestamps=1;
+			printf("Enabled timestamps\n");
+		}
+		else if ( strcmp(argv[5],"-s") == 0 )
+		{
+			enabled_fsync=1;
+			printf("Enabled fsync\n");
 		}
 	}
 
