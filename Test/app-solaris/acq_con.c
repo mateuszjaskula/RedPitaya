@@ -61,27 +61,27 @@ int main(int argc, char **argv)
 	while(!stop)
 	{
 	    /* Get the whole buffer into buf */
-			raise(SIGUSR1);
+			//raise(SIGUSR1);
+			saveTimeStamp(SIGUSR1);
 			clock_gettime(CLOCK_REALTIME, &start_acq);
-			raise(SIGUSR1);
     	rp_AcqGetOldestDataRaw(channel, &array_size, buff);
-			raise(SIGUSR1);
 	    saveBuffToFile(buff, array_size);
-			raise(SIGUSR1);
 			clock_gettime(CLOCK_REALTIME, &stop_acq);
 			//rem.tv_sec = stop_acq.tv_sec - start_acq.tv_sec;
 			//rem.tv_nsec = stop_acq.tv_nsec - start_acq.tv_nsec;
 			timespec_diff(&start_acq, &stop_acq, &rem);
 			/* If saving buffer took too long time, then exit too avoid losing data */
-			uint32_t acq_time = (nsec_in_sec * rem.tv_sec + rem.tv_nsec);
+			uint32_t acq_time_ns = (nsec_in_sec * rem.tv_sec + rem.tv_nsec);
+			/* sleep to let buffer fill with new data */
+			rem.tv_sec = (buffer_fill_time - acq_time) / nsec_in_sec;
+			rem.tv_nsec = buffer_fill_time - acq_time;
 			if( acq_time > buffer_fill_time )
 			{
 				printf("Warning Acquisition took longer then buffer fills \n");
 				printf("%"PRIu32" buffer: %"PRIu64"\n", acq_time, buffer_fill_time);
 			}
 
-			/* sleep to let buffer fill with new data */
-			rem.tv_nsec = buffer_fill_time - rem.tv_nsec;
+
 			nanosleep(&rem, &req);
   }
 
@@ -163,7 +163,7 @@ void saveTimeStamp(int sig)
 		fprintf(time_stamps_file, "%lld, \n", time_stamp);
 	}
 
-	fsync(fileno(time_stamps_file));
+	//fsync(fileno(time_stamps_file));
 	last_time = curr_time;
 }
 
@@ -179,12 +179,16 @@ void saveBuffToFile(int16_t *buffer, uint32_t size)
 
 		for(int i = 0; i < size; i++)
 			fprintf(data_file, "%llu, %d\n", (timestamp + i*offset), buffer[i]);
+
+		fsync(fileno(data_file));
+		return;
 	}
 
 	for(int i = 0; i < size; i++)
 			fprintf(data_file, "%d\n", buffer[i]);
 
-	fsync(fileno(data_file));
+	//fsync(fileno(data_file));
+	return;
 }
 
 void openBuffFile()
