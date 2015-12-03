@@ -2,8 +2,7 @@
 
 ## Tango-RedPitaya -- Tango device server for RedPitaya multi-istrument board
 ## Solaris <synchrotron.pl>
-## Copyright (C) 2015 Grzegorz Kowalski <daneos@daneos.com>
-## See LICENSE for legal information
+
 
 
 from PyTango import AttrQuality, AttrWriteType, AttrDataFormat, DispLevel, DevState
@@ -24,9 +23,10 @@ class RedPitayaBoard(Device):
 
 
 	### RPyC connection details -----------------------------------------------
-
-	host = device_property(dtype=str)							# board hostname
+	name = device_property(dtype=str)							# board name
+	host = device_property(dtype=str)							# board ip
 	port = device_property(dtype=int, default_value=18861)		# board port
+	nfs_ip = device_property(dtype=str)							# nfs if
 	reconnect = device_property(dtype=int, default_value=10)	# max reconnect attepts
 
 
@@ -40,6 +40,11 @@ class RedPitayaBoard(Device):
 		if self.reconnect_tries == self.reconnect:
 			self.status_message += "Not trying again."
 
+	def nfs_error(self, e):
+		""" Set status message informing about web application error """
+		self._state = DevState.STANDBY
+		self.status_message = "Could not connect to nfs at %s. Error message: %s\n" % (self.host, str(e))
+
 	def app_error(self, e):
 		""" Set status message informing about web application error """
 		self._state = DevState.STANDBY
@@ -52,40 +57,22 @@ class RedPitayaBoard(Device):
 		self._state = state
 		self.status_message = ""
 
+	def mount_nfs(self):
+		try:
+			command = "mount.nfs %s /mnt" % self.nfs_ip
+			self.conn.root.run_command(command)
+		except Exception as e:
+			self.connection_error(e)
+
 	def board_connect(self):
 		""" Connect to the board """
 		try:
 			self.conn = connect(self.host, self.port)
 			self.RP = RedPitaya(self.conn)
+			mount_nfs(self)
+			self.set_state_ok(DevState.ON)
 		except Exception as e:
 			self.connection_error(e)
-		else:
-			self.set_state_ok(DevState.ON)
-
-	def start_scope_app(self):
-		""" Start scope app for data acquisition """
-		try:
-			res = urlopen("http://%s/bazaar?start=scope" % self.host)
-			data = json.loads(res.read())
-			if data["status"] != "OK":
-				self.app_error("Device didn't start the app: %s" % data["reason"])
-		except Exception as e:
-			self.app_error(e)
-		else:
-			self.set_state_ok(DevState.ON)
-
-	def stop_scope_app(self):
-		""" Stop scope app """
-		try:
-			res = urlopen("http://%s/bazaar?stop=" % self.host)
-			data = json.loads(res.read())
-			if data["status"] != "OK":
-				self.app_error("Device didn't stop the app: %s" % data["reason"])
-				return
-		except Exception as e:
-			self.app_error(e)
-		else:
-			self.set_state_ok(DevState.ON)
 
 	def start_generator(self, channel, opts):
 		""" Start signal generator decribed by opts on desired output channel.
@@ -106,16 +93,38 @@ class RedPitayaBoard(Device):
 			self.status_message = "Error: Type must be either sine, sqr or tri"
 			return False
 		else:
-			command = "/opt/bin/generate %d %s" % (channel, opts)
+			command = "/opt/redpitaya/bin/generate %d %s" % (channel, opts)
 			self.conn.root.run_command(command)
 			return True
 
-	def scope_active_func(self):
+	def start_continous_acquisition(self, channel, decimation, opts):
+		""" Start signal acquisition """
+		# data sanity check
+		dataFileName = "/mnt/%s-data_CH%d.csv" % (self.name ,channel)
+		try:
+			command = "/root/acquireContinous %d %s &" % (channel, opts)
+			self.conn.root.run_command(command)
+		except Exception as e:
+			self.app_error(e)
+			return False
+
+	def start_limited_acquisition(self, channel, decimation, opts, timeout):
+		""" Start signal acquisition """
+		# data sanity check
+		dataFileName = "/mnt/%s-data_CH%d.csv" % (self.name ,channel)
+		try:
+			command = "timeout %d /root/acquireContinous %d %s &" % (timeout, channel, opts)
+			self.conn.root.run_command(command)
+		except Exception as e:
+			self.app_error(e)
+			return False
+
+	def acquisition_active_func(self):
 		""" Get scope status. It's here, because there is no way of reading the attribute inside the server.
 			(At least no documented way...) """
 		try:
-			res = urlopen("http://%s/data" % self.host)
-			rstatus = json.loads(res.read())["status"]
+			command = "pgrep acquireContinous"
+			self.conn.root.run_command(command)
 		except Exception as e:
 			self.app_error(e)
 			return False
@@ -198,22 +207,6 @@ class RedPitayaBoard(Device):
 			self.reconnect_tries = 0	# reset reconnect counter
 			return "OK"
 
-
-	### Oscilloscope attributes -----------------------------------------------
-
-	@attribute(label="Scope active", dtype=bool,
-			   access=AttrWriteType.READ_WRITE,
-			   fset="set_scope_active",
-			   doc="Oscilloscope operation state")
-	def scope_active(self):
-		return self.scope_active_func()
-	def set_scope_active(self, v):
-		if v:
-			self.start_scope_app()
-		else:
-			self.stop_scope_app()
-
-
 	### Generator attributes --------------------------------------------------
 
 	@attribute(label="Generator CH1 active", dtype=bool,
@@ -279,40 +272,12 @@ class RedPitayaBoard(Device):
 	def ddr_voltage(self):
 		return self.RP.ams.vccddr
 
-
-	### Oscilloscope commands -------------------------------------------------
-
-	# need to be a command, because as attribute it exceeds data size limit
-	@command(dtype_in="int", doc_in="Channel number",
-			 dtype_out=[float], doc_out="Scope input data")
-	def scope_data(self, ch):
-		# data sanity check
-		if ch < 1 or ch > 2:
-			self.status_message = "Error: Scope channel should be 1 or 2"
-			return [0]
-		else:
-			self.status_message = ""
-
-		try:
-			res = urlopen("http://%s/data" % self.host)
-			data_full = json.loads(res.read())
-			if data_full["status"] != "OK":
-				if data_full['status'] != "OK":
-					self.app_error("Could not fetch data from webapp: %s" % data_full["reason"])
-					return [0]
-			data = data_full["datasets"]["g1"][ch-1]["data"]
-		except Exception as e:
-			self.app_error(e)
-			return
-		return [x[1] for x in data]		# remove timestamp part		
-
-
 	### Generator commands ----------------------------------------------------
 
 	@command(dtype_in=str,	# it was supposed to be an array of arguments, but since ATKPanel doesn't support that it had to change
 			 doc_in="Start signal generator. Arguments: Vpp amplitude, frequency [Hz], type (sine, sqr, tri)")
 	def start_generator_ch1(self, argstr):
-		ch2_active = self.generator_active(2) 
+		ch2_active = self.generator_active(2)
 		if self.start_generator(1, argstr):
 			if not ch2_active:				# if the other channel wasn't active earlier
 				self.stop_generator(2)		# stop the other channel (required because of internal behavior)
