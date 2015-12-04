@@ -15,6 +15,8 @@ from rpyc import connect
 from urllib2 import urlopen
 import json
 import re
+from __builtin__ import str
+from numpy import integer
 
 
 class RedPitayaBoard(Device):
@@ -26,8 +28,9 @@ class RedPitayaBoard(Device):
 	name = device_property(dtype=str)							# board name
 	host = device_property(dtype=str)							# board ip
 	port = device_property(dtype=int, default_value=18861)		# board port
-	nfs_ip = device_property(dtype=str)							# nfs if
-	reconnect = device_property(dtype=int, default_value=10)	# max reconnect attepts
+	nfs_ip = device_property(dtype=str)							# nfs ip
+	mnt_point = device_property(dtype=str)						# mnt point
+	reconnect = device_property(dtype=int, default_value=30)	# max reconnect attempts
 
 
 	### Utilities -------------------------------------------------------------
@@ -59,7 +62,8 @@ class RedPitayaBoard(Device):
 
 	def mount_nfs(self):
 		try:
-			command = "mount.nfs %s /mnt" % self.nfs_ip
+			command = "mount.nfs %s:%s /mnt" % (self.nfs_ip, self.mnt_point)
+			print command
 			self.conn.root.run_command(command)
 		except Exception as e:
 			self.connection_error(e)
@@ -69,8 +73,8 @@ class RedPitayaBoard(Device):
 		try:
 			self.conn = connect(self.host, self.port)
 			self.RP = RedPitaya(self.conn)
-			mount_nfs(self)
-			self.set_state_ok(DevState.ON)
+			self.mount_nfs()
+			self.set_state_ok(DevState.STANDBY)
 		except Exception as e:
 			self.connection_error(e)
 
@@ -97,18 +101,22 @@ class RedPitayaBoard(Device):
 			self.conn.root.run_command(command)
 			return True
 
-	def start_continous_acquisition(self, channel, decimation, opts):
+	def start_continous_acquisition(self, opts):
 		""" Start signal acquisition """
+		""" Required: Channel Decimation """
+		""" Optionals: -t to enable timestamps -s to force fsync(dataFile) """
+		
 		# data sanity check
-		dataFileName = "/mnt/%s-data_CH%d.csv" % (self.name ,channel)
+		dataFileName = "/mnt/%s-data.csv" % (self.name)
 		try:
-			command = "/root/acquireContinous %d %s &" % (channel, opts)
+			command = "/root/acquireContinousApp %s %s &" % (opts, dataFileName)
+			print command
 			self.conn.root.run_command(command)
 		except Exception as e:
 			self.app_error(e)
 			return False
 
-	def start_limited_acquisition(self, channel, decimation, opts, timeout):
+	def start_limited_acquisition(self, opts, timeout):
 		""" Start signal acquisition """
 		# data sanity check
 		dataFileName = "/mnt/%s-data_CH%d.csv" % (self.name ,channel)
@@ -165,12 +173,11 @@ class RedPitayaBoard(Device):
 		""" Appropiate state handling """
 		if self._state != DevState.FAULT:	# if state is FAULT set it immediately, to prevent timeouts
 			# if generator or scope is active, state must be RUNNING no matter what
-			if self.generator_active(1) or self.generator_active(2) or self.scope_active_func():
+			if self.generator_active(1) or self.generator_active(2):
 				self.set_state(DevState.RUNNING)
 				return DevState.RUNNING
 		self.set_state(self._state)
 		return self._state
-
 
 	### Attributes ------------------------------------------------------------
 
@@ -190,7 +197,229 @@ class RedPitayaBoard(Device):
 		return self.RP.hk.led
 	def set_leds(self, leds):
 		self.RP.hk.led = leds
+		
+	@attribute(label="PID11 setter", dtype="int",		# plain int type causes errors
+			   access=AttrWriteType.READ_WRITE,
+			   fset="set_setpoint_pid11", unit="",
+			   min_value=0, max_value=255,
+			   doc="PID Setpoint")
+	def setpoint_pid11(self):
+		return self.RP.pid11.setpoint
+	
+	def set_setpoint_pid11(self, set_value):
+		self.RP.pid11.setpoint = set_value
+		
+	@attribute(label="PID12 setter", dtype="int",		# plain int type causes errors
+			   access=AttrWriteType.READ_WRITE,
+			   fset="set_setpoint_pid12", unit="",
+			   min_value=0, max_value=255,
+			   doc="PID Setpoint")
+	def setpoint_pid12(self):
+		return self.RP.pid12.setpoint
+	
+	def set_setpoint_pid12(self, set_value):
+		self.RP.pid12.setpoint = set_value
+		
+	@attribute(label="PID21 setter", dtype="int",		# plain int type causes errors
+			   access=AttrWriteType.READ_WRITE,
+			   fset="set_setpoint_pid21", unit="",
+			   min_value=0, max_value=255,
+			   doc="PID Setpoint")
+	def setpoint_pid21(self):
+		return self.RP.pid21.setpoint
+	
+	def set_setpoint_pid21(self, set_value):
+		self.RP.pid21.setpoint = set_value
+		
+	@attribute(label="PID22 setter", dtype="int",		# plain int type causes errors
+			   access=AttrWriteType.READ_WRITE,
+			   fset="set_setpoint_pid22", unit="",
+			   min_value=0, max_value=255,
+			   doc="PID Setpoint")
+	def setpoint_pid22(self):
+		return self.RP.pid22.setpoint
+	
+	def set_setpoint_pid22(self, set_value):
+		self.RP.pid22.setpoint = set_value
+		
+	@attribute(label="PID11 proportional", dtype="int",		# plain int type causes errors
+			   access=AttrWriteType.READ_WRITE,
+			   fset="set_reset_pid11", unit="",
+			   min_value=0, max_value=255,
+			   doc="PID reset")
+	def reset_pid11(self):
+		return self.RP.pid11.reset
+	
+	def set_reset_pid11(self, set_value):
+		self.RP.pid11.reset = set_value
+		
+	@attribute(label="PID12 reset", dtype="int",		# plain int type causes errors
+			   access=AttrWriteType.READ_WRITE,
+			   fset="set_reset_pid12", unit="",
+			   min_value=0, max_value=255,
+			   doc="PID reset")
+	def reset_pid12(self):
+		return self.RP.pid12.reset
+	
+	def set_reset_pid12(self, set_value):
+		self.RP.pid12.reset = set_value
+		
+	@attribute(label="PID21 reset", dtype="int",		# plain int type causes errors
+			   access=AttrWriteType.READ_WRITE,
+			   fset="set_reset_pid21", unit="",
+			   min_value=0, max_value=255,
+			   doc="PID reset")
+	def reset_pid21(self):
+		return self.RP.pid21.reset
+	
+	def set_reset_pid21(self, set_value):
+		self.RP.pid21.reset = set_value
+		
+	@attribute(label="PID22 reset", dtype="int",		# plain int type causes errors
+			   access=AttrWriteType.READ_WRITE,
+			   fset="set_reset_pid22", unit="",
+			   min_value=0, max_value=255,
+			   doc="PID Setpoint")
+	def reset_pid22(self):
+		return self.RP.pid22.reset
+	
+	def set_reset_pid22(self, set_value):
+		self.RP.pid22.reset = set_value
 
+	@attribute(label="PID11 proportional", dtype="int",		# plain int type causes errors
+			   access=AttrWriteType.READ_WRITE,
+			   fset="set_proportional_pid11", unit="",
+			   min_value=0, max_value=255,
+			   doc="PID proportional")
+	def proportional_pid11(self):
+		return self.RP.pid11.proportional
+	
+	def set_proportional_pid11(self, set_value):
+		self.RP.pid11.proportional = set_value
+		
+	@attribute(label="PID12 proportional", dtype="int",		# plain int type causes errors
+			   access=AttrWriteType.READ_WRITE,
+			   fset="set_proportional_pid12", unit="",
+			   min_value=0, max_value=255,
+			   doc="PID proportional")
+	def proportional_pid12(self):
+		return self.RP.pid12.proportional
+	
+	def set_proportional_pid12(self, set_value):
+		self.RP.pid12.proportional = set_value
+		
+	@attribute(label="PID21 proportional", dtype="int",		# plain int type causes errors
+			   access=AttrWriteType.READ_WRITE,
+			   fset="set_proportional_pid21", unit="",
+			   min_value=0, max_value=255,
+			   doc="PID proportional")
+	def proportional_pid21(self):
+		return self.RP.pid21.proportional
+	
+	def set_proportional_pid21(self, set_value):
+		self.RP.pid21.proportional = set_value
+		
+	@attribute(label="PID22 proportional", dtype="int",		# plain int type causes errors
+			   access=AttrWriteType.READ_WRITE,
+			   fset="set_proportional_pid22", unit="",
+			   min_value=0, max_value=255,
+			   doc="PID Setpoint")
+	def proportional_pid22(self):
+		return self.RP.pid22.proportional
+	
+	def set_proportional_pid22(self, set_value):
+		self.RP.pid22.proportional = set_value
+
+
+
+	@attribute(label="PID11 integral", dtype="int",		# plain int type causes errors
+			   access=AttrWriteType.READ_WRITE,
+			   fset="set_integral_pid11", unit="",
+			   min_value=0, max_value=255,
+			   doc="PID integral")
+	def integral_pid11(self):
+		return self.RP.pid11.integral
+	
+	def set_integral_pid11(self, set_value):
+		self.RP.pid11.integral = set_value
+		
+	@attribute(label="PID12 integral", dtype="int",		# plain int type causes errors
+			   access=AttrWriteType.READ_WRITE,
+			   fset="set_integral_pid12", unit="",
+			   min_value=0, max_value=255,
+			   doc="PID integral")
+	def integral_pid12(self):
+		return self.RP.pid12.integral
+	
+	def set_integral_pid12(self, set_value):
+		self.RP.pid12.integral = set_value
+		
+	@attribute(label="PID21 integral", dtype="int",		# plain int type causes errors
+			   access=AttrWriteType.READ_WRITE,
+			   fset="set_integral_pid21", unit="",
+			   min_value=0, max_value=255,
+			   doc="PID integral")
+	def integral_pid21(self):
+		return self.RP.pid21.integral
+	
+	def set_integral_pid21(self, set_value):
+		self.RP.pid21.integral = set_value
+		
+	@attribute(label="PID22 integral", dtype="int",		# plain int type causes errors
+			   access=AttrWriteType.READ_WRITE,
+			   fset="set_integral_pid22", unit="",
+			   min_value=0, max_value=255,
+			   doc="PID Setpoint")
+	def integral_pid22(self):
+		return self.RP.pid22.integral
+	
+	def set_integral_pid22(self, set_value):
+		self.RP.pid22.integral = set_value
+
+	@attribute(label="PID11 derivative", dtype="int",		# plain int type causes errors
+			   access=AttrWriteType.READ_WRITE,
+			   fset="set_derivative_pid11", unit="",
+			   min_value=0, max_value=255,
+			   doc="PID derivative")
+	def derivative_pid11(self):
+		return self.RP.pid11.derivative
+	
+	def set_derivative_pid11(self, set_value):
+		self.RP.pid11.derivative = set_value
+		
+	@attribute(label="PID12 derivative", dtype="int",		# plain int type causes errors
+			   access=AttrWriteType.READ_WRITE,
+			   fset="set_derivative_pid12", unit="",
+			   min_value=0, max_value=255,
+			   doc="PID derivative")
+	def derivative_pid12(self):
+		return self.RP.pid12.derivative
+	
+	def set_derivative_pid12(self, set_value):
+		self.RP.pid12.derivative = set_value
+		
+	@attribute(label="PID21 derivative", dtype="int",		# plain int type causes errors
+			   access=AttrWriteType.READ_WRITE,
+			   fset="set_derivative_pid21", unit="",
+			   min_value=0, max_value=255,
+			   doc="PID derivative")
+	def derivative_pid21(self):
+		return self.RP.pid21.derivative
+	
+	def set_derivative_pid21(self, set_value):
+		self.RP.pid21.derivative = set_value
+		
+	@attribute(label="PID22 derivative", dtype="int",		# plain int type causes errors
+			   access=AttrWriteType.READ_WRITE,
+			   fset="set_derivative_pid22", unit="",
+			   min_value=0, max_value=255,
+			   doc="PID Setpoint")
+	def derivative_pid22(self):
+		return self.RP.pid22.derivative
+	
+	def set_derivative_pid22(self, set_value):
+		self.RP.pid22.derivative = set_value
+	
 	@attribute(label="Ping check", dtype=str,
 			   access=AttrWriteType.READ,
 			   doc="Connection ping check")
@@ -199,9 +428,10 @@ class RedPitayaBoard(Device):
 			self.conn.ping()
 		except Exception as e:	# should be PingError, but it's not working
 			self.connection_error(e)
-			if(self.reconnect_tries < self.reconnect):
+			while(self.reconnect_tries < self.reconnect):
 				self.reconnect_tries += 1
 				self.board_connect()	# try to reconnect if possible
+
 			return "FAILED"
 		else:
 			self.reconnect_tries = 0	# reset reconnect counter
@@ -221,56 +451,6 @@ class RedPitayaBoard(Device):
 	def generator_ch2_active(self):
 		return self.generator_active(2)
 
-
-	### Voltages --------------------------------------------------------------
-
-	@attribute(label="PINT Voltage", dtype=float,
-			   access=AttrWriteType.READ,
-			   display_level=DispLevel.EXPERT,
-			   unit="V", format="%4.3f",
-			   doc="Processing system internal voltage")
-	def pint_voltage(self):
-		return self.RP.ams.vccpint
-
-	@attribute(label="PAUX Voltage", dtype=float,
-			   access=AttrWriteType.READ,
-			   display_level=DispLevel.EXPERT,
-			   unit="V", format="%4.3f",
-			   doc="Processing system auxiliary voltage")
-	def paux_voltage(self):
-		return self.RP.ams.vccpaux
-
-	@attribute(label="BRAM Voltage", dtype=float,
-			   access=AttrWriteType.READ,
-			   display_level=DispLevel.EXPERT,
-			   unit="V", format="%4.3f",
-			   doc="RAM blocks voltage")
-	def bram_voltage(self):
-		return self.RP.ams.vccbram
-
-	@attribute(label="INT Voltage", dtype=float,
-			   access=AttrWriteType.READ,
-			   display_level=DispLevel.EXPERT,
-			   unit="V", format="%4.3f",
-			   doc="Programmable logic internal voltage")
-	def int_voltage(self):
-		return self.RP.ams.vccint
-
-	@attribute(label="AUX Voltage", dtype=float,
-			   access=AttrWriteType.READ,
-			   display_level=DispLevel.EXPERT,
-			   unit="V", format="%4.3f",
-			   doc="Programmable logic internal voltage")
-	def aux_voltage(self):
-		return self.RP.ams.vccaux
-
-	@attribute(label="DDR Voltage", dtype=float,
-			   access=AttrWriteType.READ,
-			   display_level=DispLevel.EXPERT,
-			   unit="V", format="%4.3f",
-			   doc="DDR I/O voltage")
-	def ddr_voltage(self):
-		return self.RP.ams.vccddr
 
 	### Generator commands ----------------------------------------------------
 
@@ -300,3 +480,27 @@ class RedPitayaBoard(Device):
 			self.set_state_ok(DevState.ON)
 		else:
 			self.status_message = "Error: Generator channel should be 1 or 2"
+
+	@command(dtype_in="str", doc_in="CH Decimation AbsolutePathToDataFile \
+ 	[Optional: -t enables timestamps -s enables fsync on data file]")
+	def start_acquisition(self, argstr):
+		self.start_continous_acquisition(argstr)
+
+	@command(doc_in="Initialize PID11 with defaults")
+	def initialize_pid11(self):
+		return self.RP.pid11.initialize()
+	
+	@command(doc_in="Initialize PID12 with defaults")
+	def initialize_pid12(self):
+		return self.RP.pid12.initialize()
+	
+	@command(doc_in="Initialize PID21 with defaults")
+	def initialize_pid21(self):
+		return self.RP.pid21.initialize()
+	
+	@command(doc_in="Initialize PID22 with defaults")
+	def initialize_pid22(self):
+		return self.RP.pid22.initialize()
+	
+
+

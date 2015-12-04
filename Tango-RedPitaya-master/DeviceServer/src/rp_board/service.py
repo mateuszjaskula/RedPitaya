@@ -2,8 +2,8 @@
 
 import rpyc
 import os
-from raw_memory import BoardRawMemory
 
+from raw_memory import BoardRawMemory
 
 class MyService(rpyc.Service):
 	def on_connect(self):
